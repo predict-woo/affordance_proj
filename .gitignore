@@ -1,0 +1,9 @@
+kaggle.json
+*.pyc
+*.pyo
+*.pyd
+*.pyw
+*.pyz
+
+lightning_logs/
+__pycache__/
