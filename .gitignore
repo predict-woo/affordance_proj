@@ -4,6 +4,14 @@ kaggle.json
 *.pyd
 *.pyw
 *.pyz
+*.ckpt
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.tiff
 
+wandb/
 lightning_logs/
 __pycache__/
