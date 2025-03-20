@@ -10,30 +10,8 @@ import cv2
 from torchvision import transforms
 from dataset import ReferDataset, ReferDataModule
 from refer import REFER
-from affordance_clip import CLIPWrapper, FPN, AffordanceCLIP, AffordanceCLIPModule, pixel_text_contrastive_loss
-
-def overlay_heatmap(image, heatmap, alpha=0.6):
-    """Overlay a heatmap on an image"""
-    # Convert heatmap to colormap
-    heatmap_np = heatmap.cpu().numpy()
-    heatmap_np = (heatmap_np - heatmap_np.min()) / (heatmap_np.max() - heatmap_np.min() + 1e-8)
-    heatmap_np = (heatmap_np * 255).astype(np.uint8)
-    heatmap_color = cv2.applyColorMap(heatmap_np, cv2.COLORMAP_JET)
-    heatmap_color = cv2.cvtColor(heatmap_color, cv2.COLOR_BGR2RGB)
-    
-    # Convert image to numpy if it's a PIL image
-    if isinstance(image, Image.Image):
-        image_np = np.array(image)
-    else:
-        image_np = image
-    
-    # Resize heatmap to match image size if needed
-    if heatmap_color.shape[:2] != image_np.shape[:2]:
-        heatmap_color = cv2.resize(heatmap_color, (image_np.shape[1], image_np.shape[0]))
-    
-    # Overlay heatmap on image
-    overlay = cv2.addWeighted(image_np, 1-alpha, heatmap_color, alpha, 0)
-    return overlay
+from affordance_clip import CLIPWrapper, FPN, AffordanceCLIP, AffordanceCLIPModule, pixel_text_contrastive_loss, DummyFeatureExtractor
+from visualize import overlay_image_and_mask, undo_clip_normalization
 
 def load_model(checkpoint_path, device):
     """Load the trained AffordanceCLIP model"""
@@ -41,7 +19,6 @@ def load_model(checkpoint_path, device):
     clip_model, preprocess = clip.load("RN101", device=device)
     
     # Create feature extractor and wrapper
-    from train import DummyFeatureExtractor
     feature_extractor = DummyFeatureExtractor(clip_model).to(device)
     clip_wrapper = CLIPWrapper(clip_model, feature_extractor).to(device)
     
@@ -66,18 +43,6 @@ def load_model(checkpoint_path, device):
     model.eval()
     
     return model, preprocess
-
-def undo_clip_normalization(processed_image):
-    processed_image = processed_image.squeeze(0).cpu().numpy()
-    mean = np.array([0.48145466, 0.4578275, 0.40821073]).reshape(3, 1, 1)
-    std = np.array([0.26862954, 0.26130258, 0.27577711]).reshape(3, 1, 1)
-    processed_image = processed_image * std + mean
-    processed_image = np.clip(processed_image, 0, 1)
-    processed_image = (processed_image * 255).astype(np.uint8)
-    processed_image = processed_image.transpose(1, 2, 0)
-    processed_image = Image.fromarray(processed_image)
-    return processed_image
-
 
 def load_image(index):
     import numpy as np
@@ -108,6 +73,14 @@ def main():
     
     # Create output directory if it doesn't exist
     os.makedirs(args.output_dir, exist_ok=True)
+    
+    # Save the original image, heatmap, and overlay
+    if args.index is not None:
+        base_filename = f"image_{args.index}"
+        action_str = "action"
+    else:
+        base_filename = os.path.splitext(os.path.basename(args.image_path))[0]
+        action_str = args.action.replace(" ", "_")
     
     # Set up device
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -157,46 +130,41 @@ def main():
             plt.axis('off')
             plt.tight_layout()
             
-        plt.savefig(os.path.join(args.output_dir, f"activation.jpg"))
-        
+        plt.savefig(os.path.join(args.output_dir, f"{base_filename}_activation.jpg"))
     
-    # # Resize activation to match original image size
-    # activation_resized = torch.nn.functional.interpolate(
-    #     activation.unsqueeze(1),
-    #     size=(image.height, image.width),
-    #     mode='bilinear',
-    #     align_corners=False
-    # ).squeeze(1).squeeze(0)
+    print(activation.shape)
+    print(image.shape)
     
-    # # Create visualization
-    # overlay = overlay_heatmap(image, activation_resized, alpha=args.alpha)
+    image = image.cpu().squeeze(0).numpy().transpose(1, 2, 0)
+    image = undo_clip_normalization(image)
+
+    activation = activation.cpu().numpy().transpose(1, 2, 0)
     
-    # # Save the original image, heatmap, and overlay
-    # base_filename = os.path.splitext(os.path.basename(args.image_path))[0]
-    # action_str = args.action.replace(" ", "_")
+
+    # Create visualization
+    overlay = overlay_image_and_mask(image, activation)
     
+
     # # Save processed image
 
-    # plt.figure(figsize=(10, 10))
-    # plt.imshow(image)
-    # plt.axis('off')
-    # plt.tight_layout()
-    # plt.savefig(os.path.join(args.output_dir, f"{base_filename}_original.jpg"))
+    plt.figure(figsize=(10, 10))
+    plt.imshow(image)
+    plt.tight_layout()
+    plt.savefig(os.path.join(args.output_dir, f"{base_filename}_original.jpg"))
     
-    # # Save heatmap
-    # plt.figure(figsize=(10, 10))
-    # plt.imshow(activation_resized.cpu(), cmap='jet')
-    # plt.axis('off')
-    # plt.tight_layout()
-    # plt.savefig(os.path.join(args.output_dir, f"{base_filename}_{action_str}_heatmap.jpg"))
+    # Save heatmap
+    plt.figure(figsize=(10, 10))
+    heatmap = plt.imshow(activation, cmap='jet')
+    plt.colorbar(heatmap)
+    plt.tight_layout()
+    plt.savefig(os.path.join(args.output_dir, f"{base_filename}_{action_str}_heatmap.jpg"))
     
-    # # Save overlay
-    # plt.figure(figsize=(10, 10))
-    # plt.imshow(overlay)
-    # plt.axis('off')
-    # plt.title(f"Action: '{args.action}'")
-    # plt.tight_layout()
-    # plt.savefig(os.path.join(args.output_dir, f"{base_filename}_{action_str}_overlay.jpg"))
+    # Save overlay
+    plt.figure(figsize=(10, 10))
+    plt.imshow(overlay)
+    plt.title(f"Action: '{args.action}'")
+    plt.tight_layout()
+    plt.savefig(os.path.join(args.output_dir, f"{base_filename}_{action_str}_overlay.jpg"))
 
 if __name__ == "__main__":
     main()

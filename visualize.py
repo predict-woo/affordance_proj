@@ -36,3 +36,24 @@ def overlay_image_and_mask(image, mask, alpha=0.5):
     overlay = image * (1 - alpha) + mask * alpha
 
     return overlay
+
+def visualize_feature_map(feature_map, save_path, title=None):
+    '''
+    Visualize the feature map.
+    feature_map: (1, C, H, W)
+    '''
+    # reset matplotlib
+    plt.clf()
+    print(f"visualize_feature_map ({title})", feature_map.shape)
+    detached_feature_map = feature_map.detach().cpu().numpy()
+    
+    # pick the first one in the batch
+    detached_feature_map = detached_feature_map[0]
+    
+    # average over the channels
+    detached_feature_map = np.mean(detached_feature_map, axis=0)
+    plt.imshow(detached_feature_map, vmin=0)
+    plt.colorbar()
+    if title:
+        plt.title(title)
+    plt.savefig(save_path)

@@ -4,6 +4,11 @@ import torch.nn.functional as F
 import pytorch_lightning as pl
 
 LOG = False
+TRAIN_LOG = True
+
+if LOG or TRAIN_LOG:
+    from visualize import visualize_feature_map
+
 
 #############################################
 # Model Components (CLIP Feature Extractor, FPN, AffordanceCLIP)
@@ -81,30 +86,32 @@ class FPN(nn.Module):
             nn.BatchNorm2d(mid_channels),
             nn.ReLU(inplace=True)
         )
+        self.up1 = nn.Upsample(scale_factor=2, mode='nearest')
         self.conv2 = nn.Sequential(
             nn.Conv2d(in_channels_list[1], mid_channels, kernel_size=3, padding=1),
             nn.BatchNorm2d(mid_channels),
             nn.ReLU(inplace=True)
         )
+        self.up2 = nn.Upsample(scale_factor=2, mode='nearest')
         self.conv3 = nn.Sequential(
             nn.Conv2d(in_channels_list[2], mid_channels, kernel_size=3, padding=1),
             nn.BatchNorm2d(mid_channels),
-            nn.ReLU(inplace=True)
+            nn.ReLU()
         )
         # Project the global feature and spatially broadcast.
         self.proj_global = nn.Sequential(
             nn.Conv2d(clip_dim, mid_channels, kernel_size=3, padding=1),
             nn.BatchNorm2d(mid_channels),
-            nn.ReLU(inplace=True)
+            nn.ReLU()
         )
         # Final projection to match CLIP's feature dimension.
         self.out_conv = nn.Sequential(
             nn.Conv2d(mid_channels, out_channels, kernel_size=1),
             nn.BatchNorm2d(out_channels),
-            nn.ReLU(inplace=True)
+            nn.ReLU()
         )
 
-    def forward(self, global_feat, feats):
+    def forward(self, global_feat, feats, batch_idx=None):
         B = global_feat.size(0)
         # Get the spatial size from the lowest-resolution feature (F3)
         _, _, H3, W3 = feats[2].shape
@@ -114,18 +121,49 @@ class FPN(nn.Module):
         global_feat = global_feat.view(B, -1, 1, 1).expand(-1, -1, H3, W3)
         global_proj = self.proj_global(global_feat)
         
+        if LOG:
+            for i, feat in enumerate(feats):
+                visualize_feature_map(feat, f"org_feat_{i}.png", title=f"original feat {i}")
+        
+        if TRAIN_LOG and batch_idx is not None:
+            visualize_feature_map(feats[0], f"train_log/feat1_{batch_idx}.png", title=f"feat(0) idx: {batch_idx}")
+        
         # Convert feature maps to same precision as model weights
         feat1 = self.conv1(feats[0].to(self.conv1[0].weight.dtype))
         feat2 = self.conv2(feats[1].to(self.conv2[0].weight.dtype))
         feat3 = self.conv3(feats[2].to(self.conv3[0].weight.dtype))
         
+        if LOG:
+            visualize_feature_map(feat1, "feat1.png", title="feat1")
+            visualize_feature_map(feat2, "feat2.png", title="feat2")
+            visualize_feature_map(feat3, "feat3.png", title="feat3")
+        
+        if TRAIN_LOG and batch_idx is not None:
+            visualize_feature_map(feat1, f"train_log/conv_feat1_{batch_idx}.png", title=f"conv(feat(0)) idx: {batch_idx}")
+        
         # Top-down fusion: start at F3 and upsample progressively.
+        
+        # draw feat3 and global_proj as heatmap with bar
+        if LOG:
+            visualize_feature_map(global_proj, "global_proj.png", title="global_proj")
         fpn3 = feat3 + global_proj
-        fpn3_up = F.interpolate(fpn3, size=feat2.shape[2:], mode='nearest')
+        if LOG:
+            visualize_feature_map(fpn3, "fpn3.png", title="fpn3")
+        fpn3_up = self.up1(fpn3)
+        if LOG:
+            visualize_feature_map(fpn3_up, "fpn3_up.png", title="fpn3_up")
         fpn2 = feat2 + fpn3_up
-        fpn2_up = F.interpolate(fpn2, size=feat1.shape[2:], mode='nearest')
+        if LOG:
+            visualize_feature_map(fpn2, "fpn2.png", title="fpn2")
+        fpn2_up = self.up2(fpn2)
+        if LOG:
+            visualize_feature_map(fpn2_up, "fpn2_up.png", title="fpn2_up")
         fpn1 = feat1 + fpn2_up
+        if LOG:
+            visualize_feature_map(fpn1, "fpn1.png", title="fpn1")
         out = self.out_conv(fpn1)
+        if LOG:
+            visualize_feature_map(out, "out.png", title="out")
         return out
 
 class AffordanceCLIP(nn.Module):
@@ -141,7 +179,7 @@ class AffordanceCLIP(nn.Module):
         for param in self.clip_model.parameters():
             param.requires_grad = False
 
-    def forward(self, image, text):
+    def forward(self, image, text, batch_idx=None):
         # Obtain a global image feature and intermediate features.
         global_feat, feats = self.clip_model.image_encoder(image, return_intermediate=True)
 
